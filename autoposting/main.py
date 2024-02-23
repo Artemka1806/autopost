@@ -120,6 +120,73 @@ async def consume():
 				print(post_id)
 				r_p = requests.post(IG_POST_URL, params={"creation_id": post_id, "access_token": data["FACEBOOK_TOKEN"]})
 				print(r_p.text)
+			elif msg.topic == "fb":
+				data_dict = eval(msg.value)
+				print("recived")
+				img = base64.b64encode(data_dict["image"]).decode('utf-8')
+				r = requests.post("https://api.imgbb.com/1/upload", data={"key": data["IMGBB_TOKEN"], "image":  img, "filename": "image.png"})
+				print(r.text)
+				print(r.json()["data"]["url"])
+
+				if data_dict['text'] != "None":
+					payload = {
+						"message": f"{data_dict['text']}",
+						"url": r.json()["data"]["url"], 
+						"access_token": data["FACEBOOK_TOKEN"]
+					}
+				else:
+					payload = {
+						"url": r.json()["data"]["url"], 
+						"access_token": data["FACEBOOK_TOKEN"]
+					}
+				r = requests.post(FB_POST_URL, data=payload)
+				print(r.text)
+			elif msg.topic == "e":
+				data_dict = eval(msg.value)
+				print("recived")
+				img = base64.b64encode(blur(data_dict["image"])).decode('utf-8')
+				r = requests.post("https://api.imgbb.com/1/upload", data={"key": data["IMGBB_TOKEN"], "image":  img, "filename": "image.png"})
+				print(r.text)
+				print(r.json()["data"]["url"])
+
+				if data_dict['text'] != "None":
+					payload = {
+						"caption": f"{data_dict['text']}",
+						"image_url": r.json()["data"]["url"], 
+						"access_token": data["FACEBOOK_TOKEN"]
+					}
+				else:
+					payload = {
+						"image_url": r.json()["data"]["url"], 
+						"access_token": data["FACEBOOK_TOKEN"]
+					}
+
+				r = requests.post(IG_UPLOAD_URL, data=payload)
+				print(r.text)
+				post_id = r.json()["id"]
+				print(post_id)
+				r_p = requests.post(IG_POST_URL, params={"creation_id": post_id, "access_token": data["FACEBOOK_TOKEN"]})
+				print(r_p.text)
+				img = base64.b64encode(data_dict["image"]).decode('utf-8')
+				r = requests.post("https://api.imgbb.com/1/upload", data={"key": data["IMGBB_TOKEN"], "image":  img, "filename": "image.png"})
+				print(r.text)
+				print(r.json()["data"]["url"])
+
+				if data_dict['text'] != "None":
+					payload = {
+						"message": f"{data_dict['text']}",
+						"url": r.json()["data"]["url"], 
+						"access_token": data["FACEBOOK_TOKEN"]
+					}
+				else:
+					payload = {
+						"url": r.json()["data"]["url"], 
+						"access_token": data["FACEBOOK_TOKEN"]
+					}
+
+				
+				r = requests.post(FB_POST_URL, data=payload)
+				print(r.text)
 
 			# print("consumed: ", msg.topic, msg.partition, msg.offset,
 			# 	  msg.key, msg.value, msg.timestamp)
