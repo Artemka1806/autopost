@@ -102,12 +102,17 @@ async def consume():
 				print(r.text)
 				print(r.json()["data"]["url"])
 
-				
-				payload = {
-					"caption": f"{data_dict['text']}",
-					"image_url": r.json()["data"]["url"], 
-					"access_token": data["FACEBOOK_TOKEN"]
-				}
+				if data_dict['text'] != "None":
+					payload = {
+						"caption": f"{data_dict['text']}",
+						"image_url": r.json()["data"]["url"], 
+						"access_token": data["FACEBOOK_TOKEN"]
+					}
+				else:
+					payload = {
+						"image_url": r.json()["data"]["url"], 
+						"access_token": data["FACEBOOK_TOKEN"]
+					}
 
 				r = requests.post(IG_UPLOAD_URL, data=payload)
 				print(r.text)
