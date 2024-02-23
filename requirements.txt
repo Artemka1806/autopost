@@ -1,0 +1,4 @@
+aiogram==3.4.1
+aiokafka==0.10.0
+asyncio==3.4.3
+requests==2.31.0
