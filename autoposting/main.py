@@ -14,186 +14,158 @@ FB_POST_URL = "https://graph.facebook.com/v19.0/229959926866540/photos"
 IG_UPLOAD_URL = "https://graph.facebook.com/v19.0/17841463072998515/media"
 IG_POST_URL = "https://graph.facebook.com/v19.0/17841463072998515/media_publish"
 
-data = {}
+config = {}
 
 def load_data():
 	try:
 		with open("../config.json") as config_file:
-			data = json.load(config_file)
-			return data
+			config = json.load(config_file)
+			return config
 	except FileNotFoundError:
-		print("Файл не знайдено. Будь ласка, переконайтеся, що файл 'config.json' існує.")
+		raise FileNotFoundError("Файл не знайдено. Будь ласка, переконайтеся, що файл 'config.json' існує.")
 	except json.JSONDecodeError:
-		print("Помилка декодування JSON. Будь ласка, переконайтеся, що файл 'config.json' містить коректний JSON.")
-	except Exception as e:
-		print(f"Виникла помилка: {e}")
+		raise json.JSONDecodeError("Помилка декодування JSON. Будь ласка, переконайтеся, що файл 'config.json' містить коректний JSON.")
 
 
-data = load_data()
+config = load_data()
+
+
+class Post:
+	"""Пост для публікації в соц. мережі (Instagram та/або Facebook)"""
+	def __init__(self, image, text):
+		self.image = image
+		self.text = text
+	
+
+	def __str__(self):
+		return self.text
+
+
+	def upload_image_to_server(self):
+		"""Загрузка картинки поста на сервер IMGBB. Повертає URL загруженого зображення"""
+		b64_image = base64.b64encode(self.image).decode('utf-8')
+		request_data = {
+			"key": config["IMGBB_TOKEN"],
+			"image":  b64_image,
+			"name": "img.png",
+			"expiration": 120
+		}
+		r = requests.post("https://api.imgbb.com/1/upload", data=request_data)
+		if r.status_code == 200:
+			return r.json()["data"]["url"]
+		else:
+			raise Exception(r.json()["error"]["message"])
+
+
+	def square_image(self):
+		"""Робить зображення квадратним та заміняє ним атрибут image. Нічого не повертає"""
+		foreground = Image.open(BytesIO(self.image))
+		foreground = foreground.crop((foreground.width / 2, 0, foreground.width, foreground.height))
+		foreground = foreground.resize((1000, 1000))
+
+		foreground_blurred = foreground
+		for _ in range(6):
+			foreground_blurred = foreground_blurred.filter(ImageFilter.BLUR)
+		foreground_blurred.putalpha(128)
+
+		img = Image.open(BytesIO(self.image))
+		background = Image.new("RGB", (800, 800), "black")
+		background.paste(foreground_blurred, (0, 0), foreground_blurred)
+
+		if img.height<500:
+			base_width = 800
+			wpercent = base_width / float(img.size[0])
+			hsize = int((float(img.size[1]) * float(wpercent)))
+			img = img.resize((base_width, hsize), Image.Resampling.LANCZOS)
+			x = 0
+			y = round((800 - img.height)/2)
+			background.paste(img, (x, y))
+		else:
+			base_height = 800
+			hpercent = base_height / float(img.size[1])
+			wsize = int((float(img.size[0]) * float(hpercent)))
+			img = img.resize((wsize, base_height), Image.Resampling.LANCZOS)
+			x = round((800 - img.width) / 2)
+			y = 0
+			background.paste(img, (x, y))
+
+		ready_bytes = io.BytesIO()
+		background.save(ready_bytes, format="JPEG")
+
+		self.image = ready_bytes.getvalue()
 
 
 
+	def publish_to_instagram(self, image_url):
+		"""Публікація в Instagram. Повертає URI поста"""
+		payload = {
+			"image_url":  image_url, 
+			"access_token": config["FACEBOOK_TOKEN"]
+		}
 
-def blur(b_data):
-	foreground = Image.open(BytesIO(b_data))
-	foreground = foreground.crop(
-	(foreground.width / 2, 0, foreground.width, foreground.height))  # обрізання зображення, залишаємо праву половину
+		if self.text != "None":
+			payload["caption"]= self.text
 
-	# Збільшення до розміру 1000x1000 пікселів
-	foreground = foreground.resize((1000, 1000))
+		r = requests.post(IG_UPLOAD_URL, data=payload)
+		post_id = r.json()["id"]
+		r_publish = requests.post(IG_POST_URL, params={"creation_id": post_id, "access_token": config["FACEBOOK_TOKEN"]})
 
-	# Заблюрювання зображення з більшим рівнем розмиття
-	foreground_blurred = foreground
-	for _ in range(5):
-		foreground_blurred = foreground_blurred.filter(ImageFilter.BLUR)
+		payload = {
+			"fields": "permalink", 
+			"access_token": config["FACEBOOK_TOKEN"]
+		}
 
-	# Встановлення прозорості для зображення
-	alpha = 128  # Значення прозорості (0 - повністю прозорий, 255 - повністю непрозорий)
-	foreground_blurred.putalpha(alpha)
+		r = requests.get(f"https://graph.facebook.com/v19.0/{r_publish.json()['id']}", params=payload)
+		return r.json()["permalink"]
 
-	# Відкриття початкового зображення
-	img = Image.open(BytesIO(b_data))
-	# Створення пустої картинки
-	background = Image.new("RGB", (800, 800), "black")
 
-	# Вставка заблюреного зображення на пусту картинку
-	background.paste(foreground_blurred, (0, 0), foreground_blurred)
+	def publish_to_facebook(self, image_url):
+		"""Публікація в Facebook. Повертає URI поста"""
+		payload = {
+			"url": image_url, 
+			"access_token": config["FACEBOOK_TOKEN"]
+		}
 
-	# Вставка початкового зображення поверх заблюреного
-	if img.height<500:
-		base_width = 800
-		wpercent = base_width / float(img.size[0])
-		hsize = int((float(img.size[1]) * float(wpercent)))
-		img = img.resize((base_width, hsize), Image.Resampling.LANCZOS)
-		x = 0
-		y = round((800 - img.height)/2)
-		background.paste(img, (x, y))
-	else:
-		base_height = 800
-		hpercent = base_height / float(img.size[1])
-		wsize = int((float(img.size[0]) * float(hpercent)))
-		img = img.resize((wsize, base_height), Image.Resampling.LANCZOS)
-		x = round((800 - img.width) / 2)
-		y = 0
-		background.paste(img, (x, y))
-	img_byte_arr = io.BytesIO()
-
-	#output_filename = url[len("https://lyceum.ztu.edu.ua/wp-content/uploads/"):].replace("/", "_")
-
-	background.save(img_byte_arr, format="JPEG")
-	return img_byte_arr.getvalue()
+		if self.text != "None":
+			payload["message"]= self.text
+		
+		r = requests.post(FB_POST_URL, params=payload)
+		payload = {
+			"fields": "permalink_url",
+			"access_token": config["FACEBOOK_TOKEN"]
+		}
+		r = requests.get(f"https://graph.facebook.com/v19.0/{r.json()['post_id']}", params=payload)
+		return r.json()["permalink_url"]
+			
 
 
 async def consume():
 	consumer = AIOKafkaConsumer(
 		'ig', 'fb', "e",
-		bootstrap_servers=data["KAFKA_HOST"],
+		bootstrap_servers=config["KAFKA_HOST"],
 		group_id="main")
-	# Get cluster layout and join group `my-group`
 	await consumer.start()
 	try:
-		# Consume messages
 		async for msg in consumer:
+			data = eval(msg.value)
+			p = Post(data["image"], data['text'])
 			if msg.topic == "ig":
-				data_dict = eval(msg.value)
-				print("recived")
-				img = base64.b64encode(blur(data_dict["image"])).decode('utf-8')
-				r = requests.post("https://api.imgbb.com/1/upload", data={"key": data["IMGBB_TOKEN"], "image":  img, "filename": "image.png"})
-				print(r.text)
-				print(r.json()["data"]["url"])
-
-				if data_dict['text'] != "None":
-					payload = {
-						"caption": f"{data_dict['text']}",
-						"image_url": r.json()["data"]["url"], 
-						"access_token": data["FACEBOOK_TOKEN"]
-					}
-				else:
-					payload = {
-						"image_url": r.json()["data"]["url"], 
-						"access_token": data["FACEBOOK_TOKEN"]
-					}
-
-				r = requests.post(IG_UPLOAD_URL, data=payload)
-				print(r.text)
-				post_id = r.json()["id"]
-				print(post_id)
-				r_p = requests.post(IG_POST_URL, params={"creation_id": post_id, "access_token": data["FACEBOOK_TOKEN"]})
-				print(r_p.text)
+				p.square_image()
+				image_url = p.upload_image_to_server()
+				p.publish_to_instagram(image_url)
 			elif msg.topic == "fb":
-				data_dict = eval(msg.value)
-				print("recived")
-				img = base64.b64encode(data_dict["image"]).decode('utf-8')
-				r = requests.post("https://api.imgbb.com/1/upload", data={"key": data["IMGBB_TOKEN"], "image":  img, "filename": "image.png"})
-				print(r.text)
-				print(r.json()["data"]["url"])
-
-				if data_dict['text'] != "None":
-					payload = {
-						"message": f"{data_dict['text']}",
-						"url": r.json()["data"]["url"], 
-						"access_token": data["FACEBOOK_TOKEN"]
-					}
-				else:
-					payload = {
-						"url": r.json()["data"]["url"], 
-						"access_token": data["FACEBOOK_TOKEN"]
-					}
-				r = requests.post(FB_POST_URL, data=payload)
-				print(r.text)
+				image_url = p.upload_image_to_server()
+				p.publish_to_facebook(image_url)
 			elif msg.topic == "e":
-				data_dict = eval(msg.value)
-				print("recived")
-				img = base64.b64encode(blur(data_dict["image"])).decode('utf-8')
-				r = requests.post("https://api.imgbb.com/1/upload", data={"key": data["IMGBB_TOKEN"], "image":  img, "filename": "image.png"})
-				print(r.text)
-				print(r.json()["data"]["url"])
+				image_url = p.upload_image_to_server()
+				p.publish_to_facebook(image_url)
 
-				if data_dict['text'] != "None":
-					payload = {
-						"caption": f"{data_dict['text']}",
-						"image_url": r.json()["data"]["url"], 
-						"access_token": data["FACEBOOK_TOKEN"]
-					}
-				else:
-					payload = {
-						"image_url": r.json()["data"]["url"], 
-						"access_token": data["FACEBOOK_TOKEN"]
-					}
-
-				r = requests.post(IG_UPLOAD_URL, data=payload)
-				print(r.text)
-				post_id = r.json()["id"]
-				print(post_id)
-				r_p = requests.post(IG_POST_URL, params={"creation_id": post_id, "access_token": data["FACEBOOK_TOKEN"]})
-				print(r_p.text)
-				img = base64.b64encode(data_dict["image"]).decode('utf-8')
-				r = requests.post("https://api.imgbb.com/1/upload", data={"key": data["IMGBB_TOKEN"], "image":  img, "filename": "image.png"})
-				print(r.text)
-				print(r.json()["data"]["url"])
-
-				if data_dict['text'] != "None":
-					payload = {
-						"message": f"{data_dict['text']}",
-						"url": r.json()["data"]["url"], 
-						"access_token": data["FACEBOOK_TOKEN"]
-					}
-				else:
-					payload = {
-						"url": r.json()["data"]["url"], 
-						"access_token": data["FACEBOOK_TOKEN"]
-					}
-
-				
-				r = requests.post(FB_POST_URL, data=payload)
-				print(r.text)
-
-			# print("consumed: ", msg.topic, msg.partition, msg.offset,
-			# 	  msg.key, msg.value, msg.timestamp)
-
+				p.square_image()
+				image_url = p.upload_image_to_server()
+				p.publish_to_instagram(image_url)
 	finally:
-		# Will leave consumer group; perform autocommit if enabled.
 		await consumer.stop()
 
-while True:
-	asyncio.run(consume())
+if __name__ == "__main__":
+	while True:
+		asyncio.run(consume())
