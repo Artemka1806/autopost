@@ -58,7 +58,7 @@ class Post:
 
 
 	def square_image(self):
-		"""Робить зображення квадратним та заміняє ним атрибут image. Нічого не повертає"""
+		"""Робить зображення квадратним. Повертає байти"""
 		foreground = Image.open(BytesIO(self.image))
 		foreground = foreground.crop((foreground.width / 2, 0, foreground.width, foreground.height))
 		foreground = foreground.resize((1000, 1000))
@@ -92,12 +92,16 @@ class Post:
 		ready_bytes = io.BytesIO()
 		background.save(ready_bytes, format="JPEG")
 
-		self.image = ready_bytes.getvalue()
+		return ready_bytes.getvalue()
 
 
 
-	def publish_to_instagram(self, image_url):
+	def publish_to_instagram(self):
 		"""Публікація в Instagram. Повертає URI поста"""
+
+		sq = Post(self.square_image(), self.text)
+		image_url = sq.upload_image_to_server()
+
 		payload = {
 			"image_url":  image_url, 
 			"access_token": config["FACEBOOK_TOKEN"]
@@ -119,8 +123,10 @@ class Post:
 		return r.json()["permalink"]
 
 
-	def publish_to_facebook(self, image_url):
+	def publish_to_facebook(self):
 		"""Публікація в Facebook. Повертає URI поста"""
+		image_url = self.upload_image_to_server()
+
 		payload = {
 			"url": image_url, 
 			"access_token": config["FACEBOOK_TOKEN"]
@@ -149,20 +155,17 @@ async def consume():
 		async for msg in consumer:
 			data = eval(msg.value)
 			p = Post(data["image"], data['text'])
+			
 			if msg.topic == "ig":
-				p.square_image()
-				image_url = p.upload_image_to_server()
-				p.publish_to_instagram(image_url)
-			elif msg.topic == "fb":
-				image_url = p.upload_image_to_server()
-				p.publish_to_facebook(image_url)
-			elif msg.topic == "e":
-				image_url = p.upload_image_to_server()
-				p.publish_to_facebook(image_url)
+				p.publish_to_instagram()
 
-				p.square_image()
-				image_url = p.upload_image_to_server()
-				p.publish_to_instagram(image_url)
+			elif msg.topic == "fb":
+				p.publish_to_facebook()
+
+			elif msg.topic == "e":
+				p.publish_to_facebook()
+
+				p.publish_to_instagram()
 	finally:
 		await consumer.stop()
 
