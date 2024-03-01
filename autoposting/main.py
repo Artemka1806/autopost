@@ -1,4 +1,4 @@
-from aiokafka import AIOKafkaConsumer
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 import asyncio
 
 import json
@@ -10,9 +10,14 @@ from io import BytesIO
 import os
 import base64
 
+import pymongo
+from pymongo.mongo_client import MongoClient
+from pymongo.server_api import ServerApi
+
 FB_POST_URL = "https://graph.facebook.com/v19.0/229959926866540/photos"
 IG_UPLOAD_URL = "https://graph.facebook.com/v19.0/17841463072998515/media"
 IG_POST_URL = "https://graph.facebook.com/v19.0/17841463072998515/media_publish"
+
 
 config = {}
 
@@ -30,12 +35,22 @@ def load_data():
 config = load_data()
 
 
+mongo_client = MongoClient(config["MONGODB_URI"])
+db = mongo_client["db"]
+posts = db["posts"]
+mass_groups = db["mass_groups"]
+
+
+
 class Post:
 	"""Пост для публікації в соц. мережі (Instagram та/або Facebook)"""
-	def __init__(self, image, text):
-		self.image = image
+	def __init__(self, url, header, text, image, date):
+		self.url = url
+		self.header = header
 		self.text = text
-	
+		self.image = image
+		self.date = date
+
 
 	def __str__(self):
 		return self.text
@@ -59,7 +74,8 @@ class Post:
 
 	def square_image(self):
 		"""Робить зображення квадратним. Повертає байти"""
-		foreground = Image.open(BytesIO(self.image))
+		response = requests.get(self.image)
+		foreground = Image.open(BytesIO(response.content))
 		foreground = foreground.crop((foreground.width / 2, 0, foreground.width, foreground.height))
 		foreground = foreground.resize((1000, 1000))
 
@@ -68,7 +84,8 @@ class Post:
 			foreground_blurred = foreground_blurred.filter(ImageFilter.BLUR)
 		foreground_blurred.putalpha(128)
 
-		img = Image.open(BytesIO(self.image))
+		response = requests.get(self.image)
+		img = Image.open(BytesIO(response.content))
 		background = Image.new("RGB", (800, 800), "black")
 		background.paste(foreground_blurred, (0, 0), foreground_blurred)
 
@@ -95,12 +112,14 @@ class Post:
 		return ready_bytes.getvalue()
 
 
-
 	def publish_to_instagram(self):
 		"""Публікація в Instagram. Повертає URI поста"""
 
-		sq = Post(self.square_image(), self.text)
+		sq = Post(self.url, self.header, self.text, self.square_image(), self.date)
 		image_url = sq.upload_image_to_server()
+
+
+
 
 		payload = {
 			"image_url":  image_url, 
@@ -108,7 +127,7 @@ class Post:
 		}
 
 		if self.text != "None":
-			payload["caption"]= self.text
+			payload["caption"]= f"{self.header}\n\n{self.text}"
 
 		r = requests.post(IG_UPLOAD_URL, data=payload)
 		post_id = r.json()["id"]
@@ -125,15 +144,15 @@ class Post:
 
 	def publish_to_facebook(self):
 		"""Публікація в Facebook. Повертає URI поста"""
-		image_url = self.upload_image_to_server()
+		#image_url = self.upload_image_to_server()
 
 		payload = {
-			"url": image_url, 
+			"url": self.image, 
 			"access_token": config["FACEBOOK_TOKEN"]
 		}
 
 		if self.text != "None":
-			payload["message"]= self.text
+			payload["message"]= f"{self.header}\n\n{self.url}"
 		
 		r = requests.post(FB_POST_URL, params=payload)
 		payload = {
@@ -144,6 +163,14 @@ class Post:
 		return r.json()["permalink_url"]
 			
 
+async def send_to_broker(theme, message):
+	producer = AIOKafkaProducer(bootstrap_servers=config["KAFKA_HOST"])
+	await producer.start()
+	try:
+		await producer.send(theme, message)
+	finally:
+		await producer.stop()
+
 
 async def consume():
 	consumer = AIOKafkaConsumer(
@@ -151,23 +178,40 @@ async def consume():
 		bootstrap_servers=config["KAFKA_HOST"],
 		group_id="main")
 	await consumer.start()
+
 	try:
 		async for msg in consumer:
 			data = eval(msg.value)
-			p = Post(data["image"], data['text'])
-			
+			p = Post(data["url"], data["header"], data["text"], data["image"], data["date"])
+			print(p)
 			if msg.topic == "ig":
-				p.publish_to_instagram()
+				url = p.publish_to_instagram()
+				#await send_to_broker("tg_ig", p.image, p.text, url)
 
 			elif msg.topic == "fb":
-				p.publish_to_facebook()
+				url = p.publish_to_facebook()
+				#await send_to_broker("tg_fb", p.image, p.text, url)
 
 			elif msg.topic == "e":
-				p.publish_to_facebook()
+				fb_url = p.publish_to_facebook()
+				ig_url = p.publish_to_instagram()
 
-				p.publish_to_instagram()
+
+				mongo_client.db.posts.find_one_and_update({"_id":  p.url}, {"$set": 
+					{"_id": p.url, "url": p.url, "header": p.header, "text": p.text, "image": p.image, "date": p.date, "facebook_url": fb_url, "instagram_url": ig_url}}, upsert=True
+				)
+
+				#await send_to_broker("tg", bytes(p.url))
+
+				groups = mongo_client.db.mass_groups.find({})
+
+				for i in groups:
+					r = requests.get(f"https://api.telegram.org/bot{config['TELEGRAM_BOT_TOKEN']}/sendPhoto", params={"chat_id": i["_id"], "photo": p.image, "caption": f'<b>{p.header}</b>\n\n<a href="{p.url}">🌐 Новина на сайті ліцею</a>\n\n<a href="{ig_url}">📸 Пост на Instagram</a>\n\n<a href="{fb_url}">🔵 Публікація на Facebook</a>', "parse_mode": "HTML"})
+
+				print(r.text)
 	finally:
 		await consumer.stop()
+
 
 if __name__ == "__main__":
 	while True:
